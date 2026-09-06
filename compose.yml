@@ -4,4 +4,5 @@ services:
     env_file: .env
     volumes:
       - /etc/localtime:/etc/localtime:ro
+      - ./data:/app/data
     restart: unless-stopped
