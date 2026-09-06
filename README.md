@@ -77,6 +77,25 @@ Examples:
 
 A `[Тест]`, `[Защита]`, `[Лекция]`, `[Экзамен]` or `[Консультация]` prefix in the name puts the deadline into the matching section of the message.
 
+# Running where Telegram is blocked
+Some hosts (Russian datacenters, for instance) cannot reach `api.telegram.org` at all, while the rest of the internet works. Check with `curl -m 10 https://api.telegram.org/`; a timeout means you need a proxy.
+
+Run a local client for your VPN key — [Xray-core](https://github.com/XTLS/Xray-install) with a `socks` inbound on `127.0.0.1:10808` works — and point the bot at it:
+
+```
+PROXY=socks5h://127.0.0.1:10808
+```
+
+`socks5h` makes the proxy resolve DNS too, which matters when the name itself is poisoned. The bot runs in a container, where `127.0.0.1` is the container rather than the host, so give it the host network in `compose.override.yml` (git-ignored, applied automatically):
+
+```yaml
+services:
+  deadline_bot:
+    network_mode: host
+```
+
+Only Telegram traffic goes through the proxy — the bot talks to nothing else.
+
 # Deploy
 `.github/workflows/deploy.yml` rsyncs the repo to a server on every push to `main` and restarts the container there. It needs these repository secrets: `SERVER_IP`, `SSH_PORT`, `USERNAME`, `PROJECT_PATH` and `SSH_PRIVATE_KEY` (a deploy key whose public half is in `~/.ssh/authorized_keys` on the server).
 

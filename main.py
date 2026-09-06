@@ -27,6 +27,10 @@ MAIN_GROUP_ID = int(os.getenv("MAIN_GROUP_ID") or '0')
 EDIT_MESSAGE_ID = int(os.getenv("EDIT_MESSAGE_ID") or '0')
 ADD_CALENDAR_LINK = os.getenv("ADD_CALENDAR_LINK") != 'false'
 LOCAL_DEADLINES_FILE = os.getenv("LOCAL_DEADLINES_FILE") or "data/deadlines.json"
+# Прокси для запросов к Telegram, например socks5h://127.0.0.1:10808 или
+# http://127.0.0.1:8080. Нужен там, где api.telegram.org недоступен напрямую.
+PROXY = os.getenv("PROXY") or ""
+PROXIES = {'http': PROXY, 'https': PROXY} if PROXY else None
 
 assert TOKEN, "Missing token!"
 assert MAIN_GROUP_ID, "Missing group ID!"
@@ -61,7 +65,8 @@ class TelegramException(Exception):
 
 def telegram_request(method: str, args: dict, timeout: int = 30):
     try:
-        data = requests.post(API_URL + f'{TOKEN}/{method}', json=args, timeout=timeout).json()
+        data = requests.post(API_URL + f'{TOKEN}/{method}', json=args,
+                             timeout=timeout, proxies=PROXIES).json()
         if not data['ok']:
             raise TelegramException(**data)
         return data
@@ -508,7 +513,7 @@ def fetch_remote_deadlines():
         return []
 
     try:
-        response = requests.get(DEADLINES_URL, timeout=30).json()
+        response = requests.get(DEADLINES_URL, timeout=30, proxies=PROXIES).json()
     except Exception as e:
         logging.error(f"Failed to fetch deadlines: {e}")
         return None
@@ -650,6 +655,8 @@ def main() -> None:
         return
 
     # Режим создания нового сообщения (работает 24 часа) с приёмом команд
+    if PROXY:
+        logging.info(f"Using proxy {PROXY}")
     bot_username = get_bot_username()
     set_bot_commands()
     offset = skip_pending_updates()
