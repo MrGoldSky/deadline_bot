@@ -22,4 +22,11 @@ jobs:
 
       - name: Deploy Files using Rsync
         run: |
-          rsync -avz --exclude='.git' -e "ssh -p ${{ secrets.SSH_PORT }}" $GITHUB_WORKSPACE/ ${{ secrets.USERNAME }}@${{ secrets.SERVER_IP }}:${{ secrets.PROJECT_PATH }}
+          rsync -avz --exclude='.git' --exclude='.env' --exclude='data' \
+            -e "ssh -p ${{ secrets.SSH_PORT }}" \
+            $GITHUB_WORKSPACE/ ${{ secrets.USERNAME }}@${{ secrets.SERVER_IP }}:${{ secrets.PROJECT_PATH }}
+
+      - name: Restart the bot
+        run: |
+          ssh -p "${{ secrets.SSH_PORT }}" ${{ secrets.USERNAME }}@${{ secrets.SERVER_IP }} \
+            "cd '${{ secrets.PROJECT_PATH }}' && docker compose up -d --build && docker compose ps"
