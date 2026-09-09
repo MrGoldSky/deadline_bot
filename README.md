@@ -67,6 +67,7 @@ The bot only accepts commands in `MAIN_GROUP_ID`, from anyone in that group. Com
 | `/del` | Lists the deadlines numbered, so you can pick one. |
 | `/del номер` or `/del часть названия` | Removes one. |
 | `/time ЧЧ:ММ` | Sets the time of day the message is replaced with a fresh one. |
+| `/delay N` | Hides deadlines further away than N days. `/delay 0` shows all of them again. |
 | `/help` | Prints the syntax. |
 
 Examples:
@@ -77,7 +78,23 @@ Examples:
 /add ПБД: 7 этап | 10.05 23:59 | https://info.sqlwars.ru/
 ```
 
-A `[Тест]`, `[Защита]`, `[Лекция]`, `[Экзамен]` or `[Консультация]` prefix in the name puts the deadline into the matching section of the message, and the prefix itself is stripped from the displayed name. Any other prefix — `[UML]`, `[web]` — is left alone and the deadline goes into the main section.
+# Sections
+A prefix in square brackets turns into a section of its own. `[UML] 1 лаба` and `[UML] 2 лаба` end up under a `[uml]` heading, with the prefix stripped from the names and numbering restarting inside every section:
+
+```
+[web]
+1️⃣ 1 лаба — 7 дней
+(Ср, 16 сентября в 13:30)
+
+[uml]
+1️⃣ 1 лаба — 12 дней
+(Пн, 21 сентября в 13:30)
+
+2️⃣ 2 лаба — 26 дней
+(Пн, 05 октября в 13:30)
+```
+
+Sections are ordered by their nearest deadline; deadlines with no prefix come first, without a heading. The five prefixes `[Тест]`, `[Защита]`, `[Лекция]`, `[Экзамен]` and `[Консультация]` keep their named headings (`🧑‍💻 Тесты` and so on) instead of the raw prefix.
 
 # The daily message
 The bot keeps one message in the chat and edits it in place every minute. Once a day it deletes that message and posts a fresh one, so the list stays at the bottom of the chat.
@@ -88,7 +105,7 @@ The bot keeps one message in the chat and edits it in place every minute. Once a
 {"deadlines": [...], "settings": {"daily_time": "09:00"}}
 ```
 
-Without `/time` the message is replaced 24 hours after the bot starts. When the list is empty no message is posted at all — the bot waits until the first deadline appears.
+Without `/time` the message is replaced 24 hours after the bot starts. When the list is empty no message is posted at all — the bot waits until the first deadline appears. `/delay N` narrows the message to the next N days and is stored the same way (`"delay_days": 30`); deadlines outside the horizon stay in the file and still show up in `/del`.
 
 # Running where Telegram is blocked
 Some hosts (Russian datacenters, for instance) cannot reach `api.telegram.org` at all, while the rest of the internet works. Check with `curl -m 10 https://api.telegram.org/`; a timeout means you need a proxy.

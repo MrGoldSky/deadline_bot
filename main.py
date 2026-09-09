@@ -196,6 +196,33 @@ def relevant_filter_func(d: dict) -> bool:
     return not dt_obj < dt.datetime.now(dt_obj.tzinfo)
 
 
+PREFIX_RE = re.compile(r'^\[([^\]]+)\]\s*')
+
+
+def split_prefix(name: str) -> tuple:
+    """Делит "[UML] 1 лаба" на ("uml", "1 лаба"). Без префикса — ("", name)."""
+    match = PREFIX_RE.match(name)
+    if not match:
+        return '', name
+    return match.group(1).strip().lower(), name[match.end():]
+
+
+def category_label(prefix: str) -> str:
+    """Заголовок раздела: у известных категорий — своё название, у прочих — сам префикс."""
+    for label, key in DEADLINE_TYPES:
+        if key and key == prefix:
+            return label
+    return f"[{prefix}]"
+
+
+def plural_days(number: int) -> str:
+    if number % 10 == 1 and number % 100 != 11:
+        return "день"
+    if number % 10 in (2, 3, 4) and number % 100 not in (12, 13, 14):
+        return "дня"
+    return "дней"
+
+
 def deadline_type_filter_func(d: dict, dtype: str = '') -> bool:
     if not dtype:
         # Основной раздел: всё, что не отнесено ни к одной известной категории.
@@ -253,6 +280,20 @@ def get_daily_time() -> str:
 def set_daily_time(value: str) -> None:
     store = load_store()
     store.setdefault("settings", {})["daily_time"] = value
+    save_store(store)
+
+
+def get_delay_limit() -> int:
+    """Горизонт показа в днях. 0 — показывать все дедлайны."""
+    try:
+        return int(load_store().get("settings", {}).get("delay_days", 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def set_delay_limit(days: int) -> None:
+    store = load_store()
+    store.setdefault("settings", {})["delay_days"] = days
     save_store(store)
 
 
@@ -334,9 +375,9 @@ USAGE_ADD = (
     "<code>/add Матан: ДЗ №3 | 15.05</code>\n"
     "<code>/add [Тест] ОСи: Тест | 3.03.2026 10:00</code>\n"
     "<code>/add ПБД: 7 этап | 10.05 23:59 | https://info.sqlwars.ru/</code>\n\n"
-    "Префикс <code>[Тест]</code>, <code>[Защита]</code>, <code>[Лекция]</code>, "
-    "<code>[Экзамен]</code> или <code>[Консультация]</code> кладёт дедлайн "
-    "в соответствующий раздел."
+    "Префикс в квадратных скобках создаёт раздел: <code>[UML] 1 лаба</code> и "
+    "<code>[UML] 2 лаба</code> попадут в раздел <b>[uml]</b>, а сам префикс "
+    "из названия уберётся."
 )
 
 HELP_TEXT = (
@@ -347,6 +388,8 @@ HELP_TEXT = (
     "<b>/del</b> — список с номерами, <b>/del номер</b> или "
     "<b>/del часть названия</b> — удалить\n"
     "<b>/time ЧЧ:ММ</b> — во сколько каждый день выходит новое сообщение\n"
+    "<b>/delay N</b> — показывать только дедлайны, до которых не больше N дней "
+    "(<code>/delay 0</code> — показывать все)\n"
     "<b>/help</b> — эта справка\n\n"
     "Все дедлайны хранятся в одном файле на сервере и добавляются только отсюда."
 )
@@ -502,6 +545,37 @@ def cmd_time(args: str, message: dict) -> bool:
     return False
 
 
+def cmd_delay(args: str, message: dict) -> bool:
+    value = args.strip()
+
+    if not value:
+        current = get_delay_limit()
+        if current:
+            reply(message, f"🔭 Показываются дедлайны, до которых не больше "
+                           f"<b>{current} {plural_days(current)}</b>.\n\n"
+                           "Изменить: <code>/delay N</code>, показывать все: <code>/delay 0</code>")
+        else:
+            reply(message, "🔭 Показываются все дедлайны.\n\n"
+                           "Ограничить: <code>/delay N</code>, например <code>/delay 30</code>")
+        return False
+
+    if not value.isdigit():
+        reply(message, "❌ Формат: <code>/delay N</code>, например <code>/delay 30</code>.\n"
+                       "<code>/delay 0</code> — показывать все дедлайны")
+        return False
+
+    days = int(value)
+    set_delay_limit(days)
+    logging.info(f"Delay limit set to {days} by {describe_user(message.get('from', {}))}")
+
+    if days:
+        reply(message, f"✅ Теперь показываются только дедлайны, до которых не больше "
+                       f"<b>{days} {plural_days(days)}</b>.")
+    else:
+        reply(message, "✅ Показываются все дедлайны.")
+    return True
+
+
 def cmd_help(args: str, message: dict) -> bool:
     reply(message, HELP_TEXT)
     return False
@@ -513,6 +587,7 @@ COMMANDS = {
     'delete': cmd_del,
     'list': cmd_list,
     'time': cmd_time,
+    'delay': cmd_delay,
     'help': cmd_help,
     'start': cmd_help,
 }
@@ -566,6 +641,7 @@ def set_bot_commands() -> None:
         {'command': 'list', 'description': 'Показать дедлайны прямо сейчас'},
         {'command': 'del', 'description': 'Удалить дедлайн'},
         {'command': 'time', 'description': 'Во сколько выходит новое сообщение: /time ЧЧ:ММ'},
+        {'command': 'delay', 'description': 'Показывать дедлайны не дальше N дней: /delay N'},
         {'command': 'help', 'description': 'Справка по командам'},
     ]
     try:
@@ -624,38 +700,40 @@ def get_message_text():
     # Фильтруем только актуальные дедлайны
     relevant_deadlines = list(filter(relevant_filter_func, all_deadlines))
 
-    # Если вообще нет актуальных дедлайнов - возвращаем пустую строку
+    # /delay: прячем всё, до чего осталось больше заданного числа дней
+    limit = get_delay_limit()
+    if limit:
+        horizon = dt.datetime.now(MSK) + dt.timedelta(days=limit)
+        relevant_deadlines = [d for d in relevant_deadlines
+                              if get_dt_obj_from_string(d["time"]) <= horizon]
+
+    # Если показывать нечего - возвращаем пустую строку
     if not relevant_deadlines:
         logging.info("No relevant deadlines found")
         return ""
 
-    assignments = []
-    for x in DEADLINE_TYPES:
-        filtered = list(filter(lambda t: deadline_type_filter_func(t, x[1]), relevant_deadlines))
-        assignments.append((sorted(filtered, key=lambda z: timestamp_func(z)), x[0], x[1]))
-
     text = f"🔥️️ <b>Дедлайны</b> (<i>Обновлено в {get_current_time()} 🔄</i>):\n\n"
 
-    def add_items(items: list, category_name: str = '', replace_name: str = ''):
-        if len(items) == 0:
-            return
+    # Раскладываем по разделам: раздел — это префикс в названии
+    groups = {}
+    for deadline in relevant_deadlines:
+        prefix, _ = split_prefix(deadline['name'])
+        groups.setdefault(prefix, []).append(deadline)
 
-        nonlocal text
-        REPLACE_PATTERN = re.compile(rf'^\[{replace_name}\] ', flags=re.IGNORECASE)
+    # Дедлайны без префикса идут первыми, остальные разделы — по ближайшему дедлайну
+    ordered = sorted(groups.items(),
+                     key=lambda kv: (kv[0] != '', min(timestamp_func(d) for d in kv[1])))
 
-        if category_name:
-            text += f"\n<b>{category_name}</b>:\n\n"
+    for prefix, items in ordered:
+        if prefix:
+            text += f"<b>{html.escape(category_label(prefix))}</b>\n"
 
-        for i, item in enumerate(items):
-            no = i + 1
-            if no <= 10:
-                no = NUMBER_EMOJIS[no] + " "
-            else:
-                no = str(no) + ". "
+        # Нумерация в каждом разделе своя
+        for i, item in enumerate(sorted(items, key=timestamp_func), start=1):
+            text += (NUMBER_EMOJIS[i] + " ") if i <= 10 else (str(i) + ". ")
+            text += "<b>"
 
-            text += no + "<b>"
-
-            name = re.sub(REPLACE_PATTERN, '', item['name'])
+            name = split_prefix(item['name'])[1]
             url = item.get('url')
 
             if url:
@@ -670,10 +748,6 @@ def get_message_text():
                 text += get_human_time(item["time"]) + "</a>)\n\n"
             else:
                 text += f'\n({get_human_time(item["time"])})\n\n'
-
-    # Добавляем все категории
-    for assignment_type in assignments:
-        add_items(*assignment_type)
 
     if ADD_DEADLINE_LINK:
         text += (
