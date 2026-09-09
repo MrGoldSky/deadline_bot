@@ -63,8 +63,10 @@ The bot only accepts commands in `MAIN_GROUP_ID`, from anyone in that group. Com
 | Command | What it does |
 | --- | --- |
 | `/add Название \| ДД.ММ.ГГГГ ЧЧ:ММ \| ссылка` | Adds a deadline. The link is optional; the time is optional too (defaults to 23:59), and so is the year (the nearest future one is picked). |
-| `/list` | Lists the deadlines, numbered. |
+| `/list` | Posts the deadline list right now — the same message the bot publishes daily. |
+| `/del` | Lists the deadlines numbered, so you can pick one. |
 | `/del номер` or `/del часть названия` | Removes one. |
+| `/time ЧЧ:ММ` | Sets the time of day the message is replaced with a fresh one. |
 | `/help` | Prints the syntax. |
 
 Examples:
@@ -75,7 +77,18 @@ Examples:
 /add ПБД: 7 этап | 10.05 23:59 | https://info.sqlwars.ru/
 ```
 
-A `[Тест]`, `[Защита]`, `[Лекция]`, `[Экзамен]` or `[Консультация]` prefix in the name puts the deadline into the matching section of the message.
+A `[Тест]`, `[Защита]`, `[Лекция]`, `[Экзамен]` or `[Консультация]` prefix in the name puts the deadline into the matching section of the message, and the prefix itself is stripped from the displayed name. Any other prefix — `[UML]`, `[web]` — is left alone and the deadline goes into the main section.
+
+# The daily message
+The bot keeps one message in the chat and edits it in place every minute. Once a day it deletes that message and posts a fresh one, so the list stays at the bottom of the chat.
+
+`/time ЧЧ:ММ` sets when that happens, in the server's timezone, and the setting is stored in `LOCAL_DEADLINES_FILE` alongside the deadlines:
+
+```json
+{"deadlines": [...], "settings": {"daily_time": "09:00"}}
+```
+
+Without `/time` the message is replaced 24 hours after the bot starts. When the list is empty no message is posted at all — the bot waits until the first deadline appears.
 
 # Running where Telegram is blocked
 Some hosts (Russian datacenters, for instance) cannot reach `api.telegram.org` at all, while the rest of the internet works. Check with `curl -m 10 https://api.telegram.org/`; a timeout means you need a proxy.

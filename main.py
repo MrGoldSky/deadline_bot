@@ -46,6 +46,16 @@ logging.basicConfig(
 
 NUMBER_EMOJIS = ['0.', '1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟']
 
+# Разделы сообщения. Первый — всё, что не попало в остальные
+DEADLINE_TYPES = [
+    ('', ''),  # deadlines без типа
+    ('🧑‍💻 Тесты', 'тест'),
+    ('🛡 Защиты', 'защита'),
+    ('🎓 Лекции', 'лекция'),
+    ('🤓 Экзамены', 'экзамен'),
+    ('👞 Консультации', 'консультация'),
+]
+
 MSK = dt.timezone(dt.timedelta(hours=3))
 MONTHS_EN = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
              'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -188,7 +198,10 @@ def relevant_filter_func(d: dict) -> bool:
 
 def deadline_type_filter_func(d: dict, dtype: str = '') -> bool:
     if not dtype:
-        return not re.match(r'^\[.*\]', d['name'])
+        # Основной раздел: всё, что не отнесено ни к одной известной категории.
+        # Раньше сюда не попадало ничего с префиксом в скобках, из-за чего
+        # дедлайны вроде "[UML] 1 лаба" пропадали из сообщения совсем.
+        return not any(deadline_type_filter_func(d, t) for _, t in DEADLINE_TYPES if t)
 
     return f"[{dtype.lower()}]" in d["name"].lower()
 
@@ -197,29 +210,63 @@ def deadline_type_filter_func(d: dict, dtype: str = '') -> bool:
 # Дедлайны, добавленные командой /add. Хранятся в том же формате, что и
 # дедлайны из DEADLINES_URL, и подмешиваются к ним при сборке сообщения.
 
-def load_local_deadlines() -> list:
+def load_store() -> dict:
+    """Файл целиком: дедлайны и настройки."""
     try:
         with open(LOCAL_DEADLINES_FILE, encoding='utf-8') as f:
-            return json.load(f).get("deadlines", [])
+            data = json.load(f)
     except FileNotFoundError:
-        return []
+        return {}
     except (OSError, ValueError) as e:
         logging.error(f"Failed to read {LOCAL_DEADLINES_FILE}: {e}")
-        return []
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
-def save_local_deadlines(deadlines: list) -> None:
+def save_store(store: dict) -> None:
     directory = os.path.dirname(LOCAL_DEADLINES_FILE)
     if directory:
         os.makedirs(directory, exist_ok=True)
 
-    # Прошедшие дедлайны больше не нужны — чистим, чтобы файл не рос вечно
-    deadlines = list(filter(relevant_filter_func, deadlines))
-
     tmp_file = LOCAL_DEADLINES_FILE + '.tmp'
     with open(tmp_file, 'w', encoding='utf-8') as f:
-        json.dump({"deadlines": deadlines}, f, ensure_ascii=False, indent=2)
+        json.dump(store, f, ensure_ascii=False, indent=2)
     os.replace(tmp_file, LOCAL_DEADLINES_FILE)
+
+
+def load_local_deadlines() -> list:
+    return load_store().get("deadlines", [])
+
+
+def save_local_deadlines(deadlines: list) -> None:
+    store = load_store()
+    # Прошедшие дедлайны больше не нужны — чистим, чтобы файл не рос вечно
+    store["deadlines"] = list(filter(relevant_filter_func, deadlines))
+    save_store(store)
+
+
+def get_daily_time() -> str:
+    """Время ежедневной публикации, ЧЧ:ММ. Пустая строка — сутки от запуска."""
+    return load_store().get("settings", {}).get("daily_time", "")
+
+
+def set_daily_time(value: str) -> None:
+    store = load_store()
+    store.setdefault("settings", {})["daily_time"] = value
+    save_store(store)
+
+
+def next_repost_time(after: dt.datetime) -> dt.datetime:
+    """Когда текущее сообщение сменится новым."""
+    daily = get_daily_time()
+    if not daily:
+        return after + dt.timedelta(days=1)
+
+    hour, minute = (int(part) for part in daily.split(':'))
+    target = after.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if target <= after:
+        target += dt.timedelta(days=1)
+    return target
 
 
 def sorted_local_deadlines(deadlines: list) -> list:
@@ -296,8 +343,10 @@ HELP_TEXT = (
     f"🤖 <b>{BOT_NAME}</b>\n\n"
     "<b>/add</b> — добавить дедлайн:\n"
     f"{USAGE_ADD}\n\n"
-    "<b>/list</b> — список добавленных командами дедлайнов с номерами\n"
-    "<b>/del номер</b> или <b>/del часть названия</b> — удалить такой дедлайн\n"
+    "<b>/list</b> — показать дедлайны прямо сейчас\n"
+    "<b>/del</b> — список с номерами, <b>/del номер</b> или "
+    "<b>/del часть названия</b> — удалить\n"
+    "<b>/time ЧЧ:ММ</b> — во сколько каждый день выходит новое сообщение\n"
     "<b>/help</b> — эта справка\n\n"
     "Все дедлайны хранятся в одном файле на сервере и добавляются только отсюда."
 )
@@ -354,53 +403,55 @@ def cmd_add(args: str, message: dict) -> bool:
 
 
 def cmd_list(args: str, message: dict) -> bool:
-    deadlines = sorted_local_deadlines(load_local_deadlines())
-    if not deadlines:
+    text = get_message_text()
+
+    if text is None:
+        reply(message, "❌ Не смог собрать список, попробуйте ещё раз")
+    elif not text:
         reply(message, "Дедлайнов пока нет.\n\n"
                        f"📝 <b>Как добавить дедлайн:</b>\n{USAGE_ADD}")
-        return False
-
-    text = "📌 <b>Добавленные командой дедлайны:</b>\n\n"
-    for i, deadline in enumerate(deadlines, start=1):
-        text += f"{i}. <b>{html.escape(deadline['name'])}</b> — {get_human_time(deadline['time'])}"
-        if deadline.get('added_by'):
-            text += f" (от {html.escape(deadline['added_by'])})"
-        text += "\n"
-    text += "\nУдалить: <code>/del номер</code>"
-
-    reply(message, text)
+    else:
+        reply(message, text)
     return False
 
 
 def cmd_del(args: str, message: dict) -> bool:
     query = args.strip()
-    if not query:
-        reply(message, "Укажите номер из /list или часть названия: <code>/del 2</code>")
-        return False
-
     stored = load_local_deadlines()
     deadlines = sorted_local_deadlines(stored)
+
     if not deadlines:
         reply(message, "Дедлайнов пока нет, удалять нечего")
+        return False
+
+    if not query:
+        text = "🗑 <b>Что удалить?</b>\n\n"
+        for i, deadline in enumerate(deadlines, start=1):
+            text += f"{i}. <b>{html.escape(deadline['name'])}</b> — {get_human_time(deadline['time'])}"
+            if deadline.get('added_by'):
+                text += f" (от {html.escape(deadline['added_by'])})"
+            text += "\n"
+        text += "\n<code>/del номер</code> или <code>/del часть названия</code>"
+        reply(message, text)
         return False
 
     if query.isdigit():
         number = int(query)
         if not 1 <= number <= len(deadlines):
-            reply(message, f"❌ Нет дедлайна с номером {number}. Список — /list")
+            reply(message, f"❌ Нет дедлайна с номером {number}. Список — /del без номера")
             return False
         targets = [deadlines[number - 1]]
     else:
         targets = [d for d in deadlines if query.lower() in d['name'].lower()]
 
     if not targets:
-        reply(message, "❌ Не нашёл такой дедлайн. Список — /list")
+        reply(message, "❌ Не нашёл такой дедлайн. Список — /del без номера")
         return False
 
     if len(targets) > 1:
         names = "\n".join(f"• {html.escape(d['name'])}" for d in targets)
         reply(message, f"❌ Под запрос подходит несколько дедлайнов:\n{names}\n\n"
-                       "Уточните запрос или удалите по номеру из /list")
+                       "Уточните запрос или удалите по номеру из /del")
         return False
 
     stored.remove(targets[0])
@@ -409,6 +460,46 @@ def cmd_del(args: str, message: dict) -> bool:
 
     reply(message, f"🗑 Удалено: <b>{html.escape(targets[0]['name'])}</b>")
     return True
+
+
+TIME_RE = re.compile(r'^(\d{1,2})[:.](\d{2})$')
+
+
+def cmd_time(args: str, message: dict) -> bool:
+    value = args.strip()
+
+    if not value:
+        current = get_daily_time()
+        if current:
+            nxt = next_repost_time(dt.datetime.now())
+            when = "сегодня" if nxt.date() == dt.datetime.now().date() else "завтра"
+            reply(message, f"🕘 Новое сообщение выходит каждый день в <b>{current}</b>.\n"
+                           f"Ближайшее — {when} в {nxt.strftime('%H:%M')}.\n\n"
+                           "Изменить: <code>/time ЧЧ:ММ</code>")
+        else:
+            reply(message, "🕘 Время не задано: сообщение обновляется сутки, "
+                           "потом заменяется новым.\n\n"
+                           "Задать: <code>/time ЧЧ:ММ</code>, например <code>/time 09:00</code>")
+        return False
+
+    match = TIME_RE.match(value)
+    if not match:
+        reply(message, "❌ Формат: <code>/time ЧЧ:ММ</code>, например <code>/time 09:00</code>")
+        return False
+
+    hour, minute = int(match.group(1)), int(match.group(2))
+    if hour > 23 or minute > 59:
+        reply(message, "❌ Такого времени не бывает")
+        return False
+
+    set_daily_time(f"{hour:02d}:{minute:02d}")
+    nxt = next_repost_time(dt.datetime.now())
+    when = "сегодня" if nxt.date() == dt.datetime.now().date() else "завтра"
+    logging.info(f"Daily time set to {hour:02d}:{minute:02d} by {describe_user(message.get('from', {}))}")
+
+    reply(message, f"✅ Новое сообщение будет выходить каждый день в "
+                   f"<b>{hour:02d}:{minute:02d}</b>.\nБлижайшее — {when} в {nxt.strftime('%H:%M')}.")
+    return False
 
 
 def cmd_help(args: str, message: dict) -> bool:
@@ -421,6 +512,7 @@ COMMANDS = {
     'del': cmd_del,
     'delete': cmd_del,
     'list': cmd_list,
+    'time': cmd_time,
     'help': cmd_help,
     'start': cmd_help,
 }
@@ -471,8 +563,9 @@ def set_bot_commands() -> None:
     """Регистрирует команды, чтобы Telegram подсказывал их при вводе."""
     commands = [
         {'command': 'add', 'description': 'Добавить дедлайн: Название | ДД.ММ.ГГГГ ЧЧ:ММ'},
-        {'command': 'list', 'description': 'Дедлайны, добавленные командой'},
-        {'command': 'del', 'description': 'Удалить добавленный командой дедлайн'},
+        {'command': 'list', 'description': 'Показать дедлайны прямо сейчас'},
+        {'command': 'del', 'description': 'Удалить дедлайн'},
+        {'command': 'time', 'description': 'Во сколько выходит новое сообщение: /time ЧЧ:ММ'},
         {'command': 'help', 'description': 'Справка по командам'},
     ]
     try:
@@ -536,17 +629,8 @@ def get_message_text():
         logging.info("No relevant deadlines found")
         return ""
 
-    types = [
-        ('', ''),  # deadlines без типа
-        ('🧑‍💻 Тесты', 'тест'),
-        ('🛡 Защиты', 'защита'),
-        ('🎓 Лекции', 'лекция'),
-        ('🤓 Экзамены', 'экзамен'),
-        ('👞 Консультации', 'консультация'),
-    ]
-
     assignments = []
-    for x in types:
+    for x in DEADLINE_TYPES:
         filtered = list(filter(lambda t: deadline_type_filter_func(t, x[1]), relevant_deadlines))
         assignments.append((sorted(filtered, key=lambda z: timestamp_func(z)), x[0], x[1]))
 
@@ -664,10 +748,25 @@ def main() -> None:
 
     msg_id = None
     text = None
-    started_updating = dt.datetime.now()
-    next_refresh = started_updating
+    daily_time = get_daily_time()
+    next_refresh = dt.datetime.now()
+    next_repost = next_repost_time(dt.datetime.now())
+    logging.info(f"Next message scheduled at {next_repost:%d.%m %H:%M}")
 
-    while dt.datetime.now() - started_updating < dt.timedelta(days=1):
+    while True:
+        # Пора заменить сообщение новым
+        if dt.datetime.now() >= next_repost:
+            if msg_id:
+                try:
+                    delete_message(msg_id)
+                    logging.info(f"Message deleted for the daily reset. Msg id: {msg_id}")
+                except Exception as e:
+                    logging.error(f"Failed to delete message: {e}")
+            msg_id, text = None, None
+            next_repost = next_repost_time(dt.datetime.now())
+            next_refresh = dt.datetime.now()
+            logging.info(f"Next message scheduled at {next_repost:%d.%m %H:%M}")
+
         if dt.datetime.now() >= next_refresh:
             next_refresh = dt.datetime.now() + REFRESH_INTERVAL
             try:
@@ -684,10 +783,13 @@ def main() -> None:
             except Exception as e:
                 logging.error(f"Unexpected error: {e}")
 
-        # Ждём команды. Запрос висит до POLL_TIMEOUT секунд и заодно
-        # задаёт паузу между обновлениями сообщения
+        # Ждём команды, но не дольше, чем до ближайшего обновления или
+        # публикации — иначе они запаздывали бы на время ожидания
+        deadline_for_wait = min(next_refresh, next_repost) - dt.datetime.now()
+        wait = max(1, min(POLL_TIMEOUT, int(deadline_for_wait.total_seconds())))
+
         try:
-            updates = get_updates(offset, POLL_TIMEOUT)
+            updates = get_updates(offset, wait)
             if updates:
                 offset = updates[-1]['update_id'] + 1
             if handle_updates(updates, bot_username):
@@ -696,13 +798,11 @@ def main() -> None:
             logging.error(f"Failed to get updates: {e}")
             time.sleep(5)
 
-    # Удаляем сообщение после 24 часов, если оно еще существует
-    if msg_id:
-        try:
-            delete_message(msg_id)
-            logging.info(f"Message deleted after 24 hours. Msg id: {msg_id}")
-        except Exception as e:
-            logging.error(f"Failed to delete message: {e}")
+        # Время публикации могли изменить командой /time
+        if get_daily_time() != daily_time:
+            daily_time = get_daily_time()
+            next_repost = next_repost_time(dt.datetime.now())
+            logging.info(f"Next message rescheduled at {next_repost:%d.%m %H:%M}")
 
 
 if __name__ == '__main__':
