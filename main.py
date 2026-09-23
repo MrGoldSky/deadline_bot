@@ -385,6 +385,7 @@ HELP_TEXT = (
     "<b>/add</b> — добавить дедлайн:\n"
     f"{USAGE_ADD}\n\n"
     "<b>/list</b> — показать дедлайны прямо сейчас\n"
+    "<b>/status</b> — все дедлайны с номерами для удаления и текущие настройки\n"
     "<b>/del</b> — список с номерами, <b>/del номер</b> или "
     "<b>/del часть названия</b> — удалить\n"
     "<b>/time ЧЧ:ММ</b> — во сколько каждый день выходит новое сообщение\n"
@@ -458,6 +459,43 @@ def cmd_list(args: str, message: dict) -> bool:
     return False
 
 
+def numbered_deadlines(header: str) -> str:
+    """Нумерованный список. Номера здесь — ровно те, что понимает /del."""
+    deadlines = sorted_local_deadlines(load_local_deadlines())
+    if not deadlines:
+        return ""
+
+    limit = get_delay_limit()
+    horizon = dt.datetime.now(MSK) + dt.timedelta(days=limit) if limit else None
+
+    text = f"{header}\n\n"
+    for i, deadline in enumerate(deadlines, start=1):
+        text += f"<b>{i}.</b> {html.escape(deadline['name'])} — {get_human_timedelta(deadline['time'])}"
+        if horizon is not None and get_dt_obj_from_string(deadline['time']) > horizon:
+            text += " · <i>не в сообщении</i>"
+        text += f"\n    <i>{get_human_time(deadline['time'])}</i>\n"
+    return text
+
+
+def cmd_status(args: str, message: dict) -> bool:
+    text = numbered_deadlines("📋 <b>Все дедлайны.</b> Номер — для <code>/del</code>:")
+
+    if not text:
+        reply(message, f"Дедлайнов пока нет.\n\n📝 <b>Как добавить дедлайн:</b>\n{USAGE_ADD}")
+        return False
+
+    daily = get_daily_time()
+    limit = get_delay_limit()
+    text += "\n⚙️ "
+    text += f"Новое сообщение в {daily}" if daily else "Новое сообщение через сутки после запуска"
+    text += " · "
+    text += (f"в сообщении — ближайшие {limit} {plural_days(limit)}" if limit
+             else "в сообщении все дедлайны")
+
+    reply(message, text)
+    return False
+
+
 def cmd_del(args: str, message: dict) -> bool:
     query = args.strip()
     stored = load_local_deadlines()
@@ -468,12 +506,7 @@ def cmd_del(args: str, message: dict) -> bool:
         return False
 
     if not query:
-        text = "🗑 <b>Что удалить?</b>\n\n"
-        for i, deadline in enumerate(deadlines, start=1):
-            text += f"{i}. <b>{html.escape(deadline['name'])}</b> — {get_human_time(deadline['time'])}"
-            if deadline.get('added_by'):
-                text += f" (от {html.escape(deadline['added_by'])})"
-            text += "\n"
+        text = numbered_deadlines("🗑 <b>Что удалить?</b>")
         text += "\n<code>/del номер</code> или <code>/del часть названия</code>"
         reply(message, text)
         return False
@@ -481,20 +514,20 @@ def cmd_del(args: str, message: dict) -> bool:
     if query.isdigit():
         number = int(query)
         if not 1 <= number <= len(deadlines):
-            reply(message, f"❌ Нет дедлайна с номером {number}. Список — /del без номера")
+            reply(message, f"❌ Нет дедлайна с номером {number}. Номера — в /status")
             return False
         targets = [deadlines[number - 1]]
     else:
         targets = [d for d in deadlines if query.lower() in d['name'].lower()]
 
     if not targets:
-        reply(message, "❌ Не нашёл такой дедлайн. Список — /del без номера")
+        reply(message, "❌ Не нашёл такой дедлайн. Номера — в /status")
         return False
 
     if len(targets) > 1:
         names = "\n".join(f"• {html.escape(d['name'])}" for d in targets)
         reply(message, f"❌ Под запрос подходит несколько дедлайнов:\n{names}\n\n"
-                       "Уточните запрос или удалите по номеру из /del")
+                       "Уточните запрос или удалите по номеру из /status")
         return False
 
     stored.remove(targets[0])
@@ -586,6 +619,7 @@ COMMANDS = {
     'del': cmd_del,
     'delete': cmd_del,
     'list': cmd_list,
+    'status': cmd_status,
     'time': cmd_time,
     'delay': cmd_delay,
     'help': cmd_help,
@@ -639,6 +673,7 @@ def set_bot_commands() -> None:
     commands = [
         {'command': 'add', 'description': 'Добавить дедлайн: Название | ДД.ММ.ГГГГ ЧЧ:ММ'},
         {'command': 'list', 'description': 'Показать дедлайны прямо сейчас'},
+        {'command': 'status', 'description': 'Все дедлайны с номерами для /del'},
         {'command': 'del', 'description': 'Удалить дедлайн'},
         {'command': 'time', 'description': 'Во сколько выходит новое сообщение: /time ЧЧ:ММ'},
         {'command': 'delay', 'description': 'Показывать дедлайны не дальше N дней: /delay N'},

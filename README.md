@@ -64,7 +64,8 @@ The bot only accepts commands in `MAIN_GROUP_ID`, from anyone in that group. Com
 | --- | --- |
 | `/add Название \| ДД.ММ.ГГГГ ЧЧ:ММ \| ссылка` | Adds a deadline. The link is optional; the time is optional too (defaults to 23:59), and so is the year (the nearest future one is picked). |
 | `/list` | Posts the deadline list right now — the same message the bot publishes daily. |
-| `/del` | Lists the deadlines numbered, so you can pick one. |
+| `/status` | Lists every deadline with the number `/del` understands, plus the current settings. |
+| `/del` | The same numbered list, for picking one to remove. |
 | `/del номер` or `/del часть названия` | Removes one. |
 | `/time ЧЧ:ММ` | Sets the time of day the message is replaced with a fresh one. |
 | `/delay N` | Hides deadlines further away than N days. `/delay 0` shows all of them again. |
@@ -93,6 +94,8 @@ A prefix in square brackets turns into a section of its own. `[UML] 1 лаба` 
 2️⃣ 2 лаба — 26 дней
 (Пн, 05 октября в 13:30)
 ```
+
+Numbering restarts inside each section, so it is a position on screen, not an id — `/del 1` would not remove the deadline shown as `1️⃣` under some section. Use `/status` for the numbers `/del` actually understands.
 
 Sections are ordered by their nearest deadline; deadlines with no prefix come first, without a heading. The five prefixes `[Тест]`, `[Защита]`, `[Лекция]`, `[Экзамен]` and `[Консультация]` keep their named headings (`🧑‍💻 Тесты` and so on) instead of the raw prefix.
 
