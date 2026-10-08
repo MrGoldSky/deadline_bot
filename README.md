@@ -129,6 +129,8 @@ services:
 
 Only Telegram traffic goes through the proxy — the bot talks to nothing else.
 
+If the VPN subscription rotates its server — mine changed address three times in two weeks — the tunnel dies and the bot keeps running while every request times out, silently, for days. A watchdog is worth more than noticing by hand: a cron job that curls Telegram through the proxy, and on two consecutive failures re-reads the subscription, validates the config with `xray run -test`, restarts the client and logs the swap. It stays quiet while the tunnel is healthy.
+
 # Deploy
 `.github/workflows/deploy.yml` rsyncs the repo to a server on every push to `main` and restarts the container there. It needs these repository secrets: `SERVER_IP`, `SSH_PORT`, `USERNAME`, `PROJECT_PATH` and `SSH_PRIVATE_KEY` (a deploy key whose public half is in `~/.ssh/authorized_keys` on the server).
 
